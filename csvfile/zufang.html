@@ -1,0 +1,279 @@
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="initial-scale=1.0, user-scalable=no, width=device-width">
+    <title>毕业生租房</title>
+    <!--高德地图接口-->
+    <link rel="stylesheet" href="http://cache.amap.com/lbs/static/main1119.css" />
+    <link rel="stylesheet" href="http://cache.amap.com/lbs/static/jquery.range.css" />
+    <script src="http://cache.amap.com/lbs/static/jquery-1.9.1.js"></script>
+    <script src="http://cache.amap.com/lbs/static/es5.min.js"></script>
+    <script src="http://webapi.amap.com/maps?v=1.4.10&key=960cf69d5dcad932e2d0e27ff8a3fb7a&plugin=AMap.ArrivalRange,AMap.Scale,AMap.Geocoder,AMap.Transfer,AMap.CitySearch,AMap.Autocomplete"></script>
+    <script src="http://cache.amap.com/lbs/static/jquery.range.js"></script>
+    <style>
+    .control-panel {
+        position: absolute;
+        top: 30px;
+        right: 20px;
+    }
+
+    .control-entry {
+        width: 280px;
+        background-color: rgba(119, 136, 153, 0.8);
+        font-family: fantasy, sans-serif;
+        text-align: left;
+        color: white;
+        overflow: auto;
+        padding: 10px;
+        margin-bottom: 10px;
+    }
+
+    .control-input {
+        margin-left: 120px;
+    }
+
+    .control-input input[type="text"] {
+        width: 160px;
+    }
+
+    .control-panel label {
+        float: left;
+        width: 120px;
+    }
+
+    #transfer-panel {
+        position: absolute;
+        background-color: white;
+        max-height: 80%;
+        overflow-y: auto;
+        top: 30px;
+        left: 20px;
+        width: 250px;
+    }
+    </style>
+</head>
+
+<body>
+    <div id="container"></div>
+    <div class="control-panel">
+        <div class="control-entry">
+            <label>选择工作省市：</label>
+                <div class="control-input">
+                    <input id="province" type="text" name="province">
+                </div>
+        </div>
+        <div class="control-entry">
+            <label>选择工作地点：</label>
+            <div class="control-input">
+                <input id="work-location" type="text">
+            </div>
+        </div>
+        <div class="control-entry">
+            <label>选择通勤方式：</label>
+            <div class="control-input">
+                <input type="radio" name="vehicle" value="SUBWAY,BUS" onClick="takeBus(this)" checked/> 公交+地铁
+                <input type="radio" name="vehicle" value="SUBWAY" onClick="takeSubway(this)" /> 地铁
+            </div>
+        </div>
+        <div class="control-entry">
+            <label>导入房源文件：</label>
+            <div class="control-input">
+                <input type="file" name="file" onChange="importRentInfo(this)" />
+            </div>
+        </div>
+    </div>
+    <div id="transfer-panel"></div>
+
+    <script>
+    //初始化地图对象，加载地图
+    var map = new AMap.Map('container', {
+        resizeEnable: true
+    });
+     var auto = new AMap.Autocomplete({
+        input: "province"
+    });
+    var options = {
+        'showButton': true,//是否显示定位按钮
+		'buttonPosition': 'LB',//定位按钮的位置
+		/* LT LB RT RB */
+		'buttonOffset': new AMap.Pixel(10, 20),//定位按钮距离对应角落的距离
+		'showMarker': true,//是否显示定位点
+		'markerOptions':{//自定义定位点样式，同Marker的Options
+		  'offset': new AMap.Pixel(-18, -36),
+		  'content':'<img src="https://a.amap.com/jsapi_demos/static/resource/img/user.png" style="width:36px;height:36px"/>'
+		},
+		'showCircle': true,//是否显示定位精度圈
+		'circleOptions': {//定位精度圈的样式
+			'strokeColor': '#0093FF',
+			'noSelect': true,
+			'strokeOpacity': 0.5,
+			'strokeWeight': 1,
+			'fillColor': '#02B0FF',
+			'fillOpacity': 0.25
+		}
+    }
+    AMap.plugin(["AMap.Geolocation"], function() {
+        var geolocation = new AMap.Geolocation(options);
+        map.addControl(geolocation);
+        geolocation.getCurrentPosition()
+    });
+
+    var scale = new AMap.Scale(); //创建比例尺
+    map.addControl(scale);
+
+    var arrivalRange = new AMap.ArrivalRange();
+    var x, y, t, vehicle = "SUBWAY,BUS";
+    var workAddress, workMarker;
+    var rentMarkerArray = [];
+    var polygonArray = [];
+    var amapTransfer;
+
+    var infoWindow = new AMap.InfoWindow({
+        offset: new AMap.Pixel(0, -30)
+    });
+
+    var auto = new AMap.Autocomplete({
+        input: "work-location"
+    });
+    AMap.event.addListener(auto, "select", workLocationSelected);
+
+
+    function takeBus(radio) {
+        vehicle = radio.value;
+        loadWorkLocation()
+    }
+
+    function takeSubway(radio) {
+        vehicle = radio.value;
+        loadWorkLocation()
+    }
+
+    function importRentInfo(fileInfo) {
+        var file = fileInfo.files[0].name;
+        loadRentLocationByFile(file);
+    }
+
+    function workLocationSelected(e) {
+        workAddress = e.poi.name;
+        loadWorkLocation();
+    }
+
+    function loadWorkMarker(x, y, locationName) {
+        workMarker = new AMap.Marker({
+            map: map,
+            title: locationName,
+            icon: 'http://webapi.amap.com/theme/v1.4.10/markers/n/mark_r.png',
+            position: [x, y]
+
+        });
+    }
+
+
+    function loadWorkRange(x, y, t, color, v) {
+        arrivalRange.search([x, y], t, function(status, result) {
+            if (result.bounds) {
+                for (var i = 0; i < result.bounds.length; i++) {
+                    var polygon = new AMap.Polygon({
+                        map: map,
+                        fillColor: color,
+                        fillOpacity: "0.4",
+                        strokeColor: color,
+                        strokeOpacity: "0.8",
+                        strokeWeight: 1
+                    });
+                    polygon.setPath(result.bounds[i]);
+                    polygonArray.push(polygon);
+                }
+            }
+        }, {
+            policy: v
+        });
+    }
+
+    function addMarkerByAddress(address) {
+        var geocoder = new AMap.Geocoder({
+            city: document.getElementById("province").value,
+        radius: 1000
+    });
+    geocoder.getLocation(address, function(status, result) {
+        if (status === "complete" && result.info === 'OK') {
+            var geocode = result.geocodes[0];
+            rentMarker = new AMap.Marker({
+                map: map,
+                title: address,
+                icon: 'http://webapi.amap.com/theme/v1.3/markers/n/mark_b.png',
+                position: [geocode.location.getLng(), geocode.location.getLat()]
+            });
+            rentMarkerArray.push(rentMarker);
+
+            rentMarker.content = "<div>房源：<a target = '_blank' href='https://dl.zu.anjuke.com/?from=navigation/?key=" + address + "'>" + address + "</a><div>"
+            rentMarker.on('click', function(e) {
+                infoWindow.setContent(e.target.content);
+                infoWindow.open(map, e.target.getPosition());
+                if (amapTransfer) amapTransfer.clear();
+                amapTransfer = new AMap.Transfer({
+                    map: map,
+                    policy: AMap.TransferPolicy.LEAST_TIME,
+                    city: document.getElementById("province").value,
+                    panel: 'transfer-panel'
+                });
+                amapTransfer.search([{
+                    keyword: workAddress
+                }, {
+                    keyword: address
+                }], function(status, result) {})
+            });
+        }
+    })
+}
+
+function delWorkLocation() {
+    if (polygonArray) map.remove(polygonArray);
+    if (workMarker) map.remove(workMarker);
+    polygonArray = [];
+}
+
+function delRentLocation() {
+    if (rentMarkerArray) map.remove(rentMarkerArray);
+    rentMarkerArray = [];
+}
+
+function loadWorkLocation() {
+    delWorkLocation();
+    var geocoder = new AMap.Geocoder({
+        city: document.getElementById("province").value,
+        radius: 1000
+    });
+
+    geocoder.getLocation(workAddress, function(status, result) {
+        if (status === "complete" && result.info === 'OK') {
+            var geocode = result.geocodes[0];
+            x = geocode.location.getLng();
+            y = geocode.location.getLat();
+            loadWorkMarker(x, y);
+            loadWorkRange(x, y, 60, "#3f67a5", vehicle);
+            map.setZoomAndCenter(12, [x, y]);
+        }
+    })
+}
+
+function loadRentLocationByFile(fileName) {
+    delRentLocation();
+    var rent_locations = new Set();
+    $.get(fileName, function(data) {
+        data = data.split("\n");
+        data.forEach(function(item, gaode) {
+            rent_locations.add(item.split(",")[1]);
+        });
+        rent_locations.forEach(function(element, gaode) {
+            addMarkerByAddress(element);
+        });
+    });
+}
+
+    </script>
+</body>
+
+</html>
